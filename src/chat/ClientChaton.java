@@ -38,7 +38,7 @@ public class ClientChaton {
       usage();
       return;
     }
-    new ClientChaton("Bob", new InetSocketAddress("localhost", 9999)).launch();
+    new ClientChaton(args[0], new InetSocketAddress("localhost", 9999)).launch();
   }
 
   private static void usage() {
@@ -297,6 +297,7 @@ public class ClientChaton {
         return; // the selector gave a bad hint
       }
       key.interestOps(SelectionKey.OP_WRITE | SelectionKey.OP_READ);
+      System.out.println("my adress : " + sc.getLocalAddress());
     }
   }
 }

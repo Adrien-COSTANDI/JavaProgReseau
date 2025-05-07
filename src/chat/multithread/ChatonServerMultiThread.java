@@ -1,17 +1,16 @@
-package chat;
+package chat.multithread;
 
+import chat.Message;
+import chat.MessageReader;
+import chat.Reader;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
-import java.net.UnixDomainSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.Channel;
 import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.util.ArrayDeque;
-import java.util.logging.Level;
+import java.util.ArrayList;
 import java.util.logging.Logger;
 
 import static java.nio.channels.SelectionKey.OP_READ;
@@ -23,11 +22,25 @@ public class ChatonServerMultiThread {
   private static final int BUFFER_SIZE = 1024;
   private static final Logger logger = Logger.getLogger(ChatonServerMultiThread.class.getName());
   private final ServerSocketChannel serverSocketChannel;
-  private final Selector selector;
+
+  private final static int NB_THREADS_SERVER = 3;
+  private final ArrayList<Thread> threads = new ArrayList<>(NB_THREADS_SERVER);
+  private final ArrayList<NetworkThread> networkThreads = new ArrayList<>(NB_THREADS_SERVER);
+
+  private int roundRobinIndex = 0;
 
   public ChatonServerMultiThread() throws IOException {
+
+    for (int i = 0; i < NB_THREADS_SERVER; i++) {
+      String name = "network-thread-" + i;
+      var networkThread = new NetworkThread(name);
+      threads.add(Thread.ofPlatform()
+          .name(name)
+          .unstarted(networkThread)
+      );
+      networkThreads.add(networkThread);
+    }
     serverSocketChannel = ServerSocketChannel.open();
-    selector = Selector.open();
     serverSocketChannel.bind(new InetSocketAddress(PORT));
   }
 
@@ -35,88 +48,35 @@ public class ChatonServerMultiThread {
     new ChatonServerMultiThread().start();
   }
 
-  public void start() throws IOException {
-    serverSocketChannel.configureBlocking(false);
-    serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+  public void start() {
+    threads.forEach(Thread::start);
 
     while (!Thread.interrupted()) {
-      System.out.println("Starting select");
       try {
-        selector.select(this::treatKey);
-      } catch (UncheckedIOException tunneled) {
-        throw tunneled.getCause();
+        var client = serverSocketChannel.accept();
+        System.out.println("Connection accepted from " + client.getRemoteAddress());
+        giveToAThread(client);
+      } catch (IOException e) {
+        logger.severe("server socket is dead, call 911");
+        System.exit(1);
+        return;
       }
-      System.out.println("Select finished");
+    }
+    logger.severe("Main thread is dead :(");
+  }
+
+  private void giveToAThread(SocketChannel client) {
+    networkThreads.get(roundRobinIndex).takeCareOf(client, this);
+    roundRobinIndex = (roundRobinIndex + 1) % NB_THREADS_SERVER;
+  }
+
+  private void broadcast(Message msg) { // broadcast tous les threads
+    for (NetworkThread networkThread : networkThreads) {
+      networkThread.localBroadcast(msg);
     }
   }
 
-  private void broadcast(Message msg) {
-    selector.keys().stream()
-        .filter(key -> key.channel() instanceof SocketChannel)
-        .forEach(key -> {
-          var context = (Context) key.attachment();
-          context.queueMessage(msg);
-        });
-  }
-
-  private void treatKey(SelectionKey key) {
-    try {
-      if (key.isValid() && key.isAcceptable()) {
-        doAccept(key);
-      }
-    } catch (IOException ioe) {
-      // lambda call in select requires to tunnel IOException
-      throw new UncheckedIOException("Entrance door is on fire!", ioe);
-    }
-    try {
-      if (key.isValid() && key.isWritable()) {
-        ((Context) key.attachment()).doWrite();
-      }
-      if (key.isValid() && key.isReadable()) {
-        ((Context) key.attachment()).doRead();
-      }
-    } catch (IOException e) {
-      logger.log(Level.INFO, "Connection closed with client due to IOException");
-      silentlyClose(key);
-    }
-  }
-
-  private void silentlyClose(SelectionKey key) {
-    Channel sc = (Channel) key.channel();
-    try {
-      sc.close();
-    } catch (IOException e) {
-      // ignore exception
-    }
-  }
-
-  private void doAccept(SelectionKey key) throws IOException {
-    var client = serverSocketChannel.accept();
-
-    if (client == null) {
-      return;
-    }
-    client.configureBlocking(false);
-
-    var socketAddress = client.getRemoteAddress();
-
-    if (socketAddress instanceof InetSocketAddress inetSocketAddress) {
-      var selectionKey = client.register(selector, OP_READ);
-      selectionKey.attach(new Context(this, selectionKey));
-    } else if (socketAddress instanceof UnixDomainSocketAddress unixDomainSocketAddress) {
-      var selectionKey = client.register(selector, OP_READ);
-      selectionKey.attach(new Context(this, selectionKey));
-    } else {
-      logger.log(Level.WARNING, "Unknown socket address type: " + socketAddress.getClass().getName());
-    }
-
-    var selectionKey = client.register(selector, OP_READ);
-    selectionKey.attach(new Context(this, selectionKey));
-
-    System.out.println("new client: " + client.getRemoteAddress());
-  }
-
-  private static class Context {
+  public static class Context {
 
     private final SelectionKey key;
     private final SocketChannel sc;
@@ -130,7 +90,7 @@ public class ChatonServerMultiThread {
 
     private boolean closed = false;
 
-    private Context(ChatonServerMultiThread server, SelectionKey key) {
+    Context(ChatonServerMultiThread server, SelectionKey key) {
       this.key = key;
       this.sc = (SocketChannel) key.channel();
       this.server = server;
@@ -216,7 +176,7 @@ public class ChatonServerMultiThread {
      *
      * @throws IOException
      */
-    private void doRead() throws IOException {
+    void doRead() throws IOException {
       if (sc.read(bufferIn) == -1) {
         closed = true;
       }
@@ -232,7 +192,7 @@ public class ChatonServerMultiThread {
      *
      * @throws IOException
      */
-    private void doWrite() throws IOException {
+    void doWrite() throws IOException {
       bufferOut.flip();
       sc.write(bufferOut);
       bufferOut.compact();
