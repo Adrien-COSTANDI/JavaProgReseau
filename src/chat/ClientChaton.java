@@ -34,7 +34,7 @@ public class ClientChaton {
   }
 
   public static void main(String[] args) throws NumberFormatException, IOException {
-    if (args.length != 3) {
+    if (args.length != 1) {
       usage();
       return;
     }
@@ -42,7 +42,7 @@ public class ClientChaton {
   }
 
   private static void usage() {
-    System.out.println("Usage : ClientChat login hostname port");
+    System.out.println("Usage : ClientChat login");
   }
 
   /**

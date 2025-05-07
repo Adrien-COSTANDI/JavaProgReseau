@@ -32,10 +32,9 @@ public class ChatonServerMultiThread {
   public ChatonServerMultiThread() throws IOException {
 
     for (int i = 0; i < NB_THREADS_SERVER; i++) {
-      String name = "network-thread-" + i;
-      var networkThread = new NetworkThread(name);
-      threads.add(Thread.ofPlatform()
-          .name(name)
+      var networkThread = new NetworkThread();
+      threads.add(Thread.ofVirtual()
+          .name("network-thread-" + i)
           .unstarted(networkThread)
       );
       networkThreads.add(networkThread);
